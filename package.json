@@ -1,0 +1,19 @@
+{
+  "name": "sionyx-remote-control",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MeshCentral server for SIONYX remote control - stores state in MongoDB Atlas so it survives Render restarts, since Render's free tier has no persistent disk.",
+  "scripts": {
+    "start": "node start.js"
+  },
+  "dependencies": {
+    "@mongodb-js/saslprep": "1.3.1",
+    "loadavg-windows": "1.1.1",
+    "meshcentral": "^1.2.5",
+    "mongodb": "4.17.2",
+    "node-windows": "0.1.14"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
