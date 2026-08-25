@@ -49,19 +49,21 @@ const port = process.env.PORT || '443';
 // --tlsoffload tells MeshCentral to trust the proxy and treat the
 // connection as already secure.
 //
-// NOTE: --launch was removed. It's meant to be passed to a CHILD process
-// that MeshCentral itself spawns, carrying the PARENT's PID so the child
-// can monitor it. Passing it here with our own PID made MeshCentral treat
-// this process as if it were its own child with itself as parent, which
-// triggered an early, silent process.exit() - not an uncaught exception,
-// so our error handlers above never saw it. Letting MeshCentral do its
-// normal self-relaunch (its default behavior without --launch) avoids
-// that broken state, at the cost of a bit more memory from the second
-// process.
+// --launch takes a small relaunch-counter value (not a PID) that
+// MeshCentral uses to track how many times it has already relaunched
+// itself. Passing our own process.pid here (a large, essentially random
+// number) previously caused MeshCentral to exit almost immediately.
+// Omitting --launch entirely instead let MeshCentral fall back to its
+// default self-relaunch supervisor loop, which re-exec'd itself
+// endlessly and never left one process listening long enough for
+// Render's port scan to succeed. Passing '0' here is the correct base
+// case for that counter, so MeshCentral runs directly in this process
+// without falling into either broken state.
 const args = [
   '--port', port,
   '--mongodb', process.env.MONGO_URL,
   '--tlsoffload',
+  '--launch', '0',
 ];
 process.argv = [process.argv[0], process.argv[1], ...args];
 console.log('[sionyx-remote-control] Starting MeshCentral on port ' + port + ' (pid ' + process.pid + ')...');
