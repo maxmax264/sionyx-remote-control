@@ -4,7 +4,7 @@
   "private": true,
   "description": "MeshCentral server for SIONYX remote control - stores state in MongoDB Atlas so it survives Render restarts, since Render's free tier has no persistent disk.",
   "scripts": {
-    "start": "node start.js"
+    "start": "node --max-old-space-size=400 start.js"
   },
   "dependencies": {
     "@mongodb-js/saslprep": "1.3.1",
