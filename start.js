@@ -37,10 +37,22 @@ const port = process.env.PORT || '443';
 // MeshCentral must NOT try to manage its own TLS certificate.
 // --tlsoffload tells MeshCentral to trust the proxy and treat the
 // connection as already secure.
+// MeshCentral's default behavior is to spawn a SECOND child Node process
+// and monitor it from this one (its own self-update/crash-restart
+// supervisor pattern) - found by reading meshcentral.js directly: without
+// --launch, this process just re-execs itself as a child and watches it.
+// On Render, that's redundant (Render already restarts the service on
+// crash) and doubles memory usage for no benefit - worse, if the child
+// crashes on startup, the error happens in a separate OS process that our
+// uncaughtException handler above can never see, so the real cause stays
+// invisible while the parent just keeps respawning it forever. Passing
+// --launch skips the child-spawn step entirely and runs the server
+// directly in this process, so real startup errors surface right here.
 const args = [
   '--port', port,
   '--mongodb', process.env.MONGO_URL,
   '--tlsoffload',
+  '--launch', String(process.pid),
 ];
 
 process.argv = [process.argv[0], process.argv[1], ...args];
