@@ -16,54 +16,36 @@ if (missing.length > 0) {
   console.error('[sionyx-remote-control] Set these in the Render dashboard under Environment, then redeploy.');
   process.exit(1);
 }
-// Surface anything that would otherwise crash the process silently -
-// MeshCentral has been observed to self-relaunch as a child process
-// during first-time setup; if that child hits an error we want it in
-// the Render log, not swallowed.
 process.on('uncaughtException', (err) => {
   console.error('[sionyx-remote-control] UNCAUGHT EXCEPTION:', err && err.stack ? err.stack : err);
 });
 process.on('unhandledRejection', (reason) => {
   console.error('[sionyx-remote-control] UNHANDLED REJECTION:', reason);
 });
-// Node.js gotcha: when stdout is a pipe (not a real TTY - exactly the case
-// inside a Render container), console.log() writes are non-blocking. If
-// code calls process.exit() right after logging an error (which
-// MeshCentral's db.js does on a failed Mongo connection - see
-// "Unable to connect to database: " + err), the process can die before
-// that write actually reaches the log stream, so the real error is lost
-// and all we see is a silent "Application exited early". Intercepting
-// process.exit() everywhere (including deep inside MeshCentral's own
-// code, not just ours) and giving stdout/stderr a brief moment to flush
-// before actually exiting reveals the real reason instead.
 const realExit = process.exit.bind(process);
 process.exit = function (code) {
   console.error('[sionyx-remote-control] process.exit(' + code + ') called - flushing logs before exit...');
   setTimeout(() => realExit(code), 500);
 };
-// Render assigns the port to listen on via process.env.PORT - MeshCentral
-// must bind to exactly this port for Render's health checks to succeed.
 const port = process.env.PORT || '443';
-// Render terminates HTTPS at its own edge and proxies plain HTTP to us, so
-// MeshCentral must NOT try to manage its own TLS certificate.
-// --tlsoffload tells MeshCentral to trust the proxy and treat the
-// connection as already secure.
-//
-// --launch takes a small relaunch-counter value (not a PID) that
-// MeshCentral uses to track how many times it has already relaunched
-// itself. Passing our own process.pid here (a large, essentially random
-// number) previously caused MeshCentral to exit almost immediately.
-// Omitting --launch entirely instead let MeshCentral fall back to its
-// default self-relaunch supervisor loop, which re-exec'd itself
-// endlessly and never left one process listening long enough for
-// Render's port scan to succeed. Passing '0' here is the correct base
-// case for that counter, so MeshCentral runs directly in this process
-// without falling into either broken state.
+// NOTE: --launch takes any truthy value (checked with a simple `if
+// (obj.args.launch)` in MeshCentral's own source) - it just tells
+// MeshCentral to run directly instead of spawning + supervising a
+// child copy of itself. It is NOT a restart counter, our earlier
+// theory about that was wrong. The actual problem is that something
+// inside MeshCentral's StartEx() calls process.exit() with no code
+// and no error message within ~1.6 seconds - too fast for a normal
+// Mongo connection timeout, and silent even with our uncaughtException
+// handler above (meaning it's an intentional, not thrown, exit deep
+// inside MeshCentral). --debug all forces MeshCentral to print its
+// internal diagnostic trace so we can see what it's doing right before
+// that exit call, instead of guessing further.
 const args = [
   '--port', port,
   '--mongodb', process.env.MONGO_URL,
   '--tlsoffload',
-  '--launch', '0',
+  '--launch', String(process.pid),
+  '--debug', 'all',
 ];
 process.argv = [process.argv[0], process.argv[1], ...args];
 console.log('[sionyx-remote-control] Starting MeshCentral on port ' + port + ' (pid ' + process.pid + ')...');
