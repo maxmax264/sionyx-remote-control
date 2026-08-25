@@ -12,11 +12,6 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason) => {
   console.error('[sionyx-remote-control] UNHANDLED REJECTION:', reason);
 });
-// Wrap process.exit to capture WHERE it's being called from - MeshCentral
-// (or one of its dependencies) is calling process.exit() with no code and
-// no preceding log message at all, even with --debug all enabled. A stack
-// trace captured at the moment of the call is the only way left to find
-// the exact file/line responsible, instead of guessing further.
 const realExit = process.exit.bind(process);
 process.exit = function (code) {
   console.error('[sionyx-remote-control] process.exit(' + code + ') called - flushing logs before exit...');
@@ -24,13 +19,32 @@ process.exit = function (code) {
   console.error(new Error().stack);
   setTimeout(() => realExit(code), 500);
 };
+// FOUND IT: stack trace showed the exit is triggered by meshcentral.js
+// line 4487, inside a ReadStream 'end' listener - this is MeshCentral's
+// interactive console feature, which listens for process.stdin to end
+// (e.g. Ctrl-D at a real terminal) as a signal to shut down. On Render,
+// stdin is not an interactive terminal - it's closed/EOF almost
+// immediately after the process starts, firing that 'end' event right
+// away and shutting the whole server down before it can finish starting.
+// This explains every prior crash: it was never about Node version,
+// Mongo, or --launch. Since we don't need an interactive console in
+// this deployment, replace process.stdin with a stub that MeshCentral
+// can attach listeners to but that never emits 'end'.
+const { EventEmitter } = require('events');
+const stdinStub = new EventEmitter();
+stdinStub.isTTY = false;
+stdinStub.setEncoding = function () { return stdinStub; };
+stdinStub.resume = function () { return stdinStub; };
+stdinStub.pause = function () { return stdinStub; };
+stdinStub.read = function () { return null; };
+stdinStub.pipe = function () { return stdinStub; };
+Object.defineProperty(process, 'stdin', { value: stdinStub, configurable: true });
 const port = process.env.PORT || '443';
 const args = [
   '--port', port,
   '--mongodb', process.env.MONGO_URL,
   '--tlsoffload',
   '--launch', String(process.pid),
-  '--debug', 'all',
 ];
 process.argv = [process.argv[0], process.argv[1], ...args];
 console.log('[sionyx-remote-control] Starting MeshCentral on port ' + port + ' (pid ' + process.pid + ')...');
