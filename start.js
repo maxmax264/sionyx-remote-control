@@ -29,6 +29,22 @@ process.on('unhandledRejection', (reason) => {
   console.error('[sionyx-remote-control] UNHANDLED REJECTION:', reason);
 });
 
+// Node.js gotcha: when stdout is a pipe (not a real TTY - exactly the case
+// inside a Render container), console.log() writes are non-blocking. If
+// code calls process.exit() right after logging an error (which
+// MeshCentral's db.js does on a failed Mongo connection - see
+// "Unable to connect to database: " + err), the process can die before
+// that write actually reaches the log stream, so the real error is lost
+// and all we see is a silent "Application exited early". Intercepting
+// process.exit() everywhere (including deep inside MeshCentral's own
+// code, not just ours) and giving stdout/stderr a brief moment to flush
+// before actually exiting reveals the real reason instead.
+const realExit = process.exit.bind(process);
+process.exit = function (code) {
+  console.error('[sionyx-remote-control] process.exit(' + code + ') called - flushing logs before exit...');
+  setTimeout(() => realExit(code), 500);
+};
+
 // Render assigns the port to listen on via process.env.PORT - MeshCentral
 // must bind to exactly this port for Render's health checks to succeed.
 const port = process.env.PORT || '443';
