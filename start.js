@@ -80,7 +80,7 @@ const args = [
   '--port', port,
   '--mongodb', process.env.MONGO_URL,
   '--tlsoffload',
-  '--datadir', dataDir,
+  '--datapath', dataDir,
   '--launch', String(process.pid),
 ];
 process.argv = [process.argv[0], process.argv[1], ...args];
