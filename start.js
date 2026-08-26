@@ -39,11 +39,48 @@ stdinStub.pause = function () { return stdinStub; };
 stdinStub.read = function () { return null; };
 stdinStub.pipe = function () { return stdinStub; };
 Object.defineProperty(process, 'stdin', { value: stdinStub, configurable: true });
+
+// --- TLS / certificate-pinning fix -----------------------------------
+// --tlsoffload alone tells MeshCentral "don't do TLS yourself, a proxy
+// (Cloudflare/Render) handles it" - but it does NOT tell MeshCentral
+// what the *real* public-facing certificate looks like. Agents pin the
+// hash of that real certificate on first connect; without certUrl,
+// MeshCentral computes the hash from its own self-signed cert instead
+// of the one clients actually see, so the agent connection gets stuck
+// in "holding" state. certUrl can only be set via config.json (there's
+// no CLI flag for it), so we generate that file here before MeshCentral
+// starts, instead of committing a static one to the repo.
+const fs = require('fs');
+const path = require('path');
+
+const publicHost = process.env.PUBLIC_HOSTNAME || process.env.RENDER_EXTERNAL_HOSTNAME || 'sionyx-remote-control.onrender.com';
+
+const dataDir = path.join(__dirname, 'meshcentral-data');
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+}
+
+const configPath = path.join(dataDir, 'config.json');
+const config = {
+  settings: {
+    cert: publicHost
+  },
+  domains: {
+    '': {
+      certUrl: 'https://' + publicHost + ':443/'
+    }
+  }
+};
+fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+console.log('[sionyx-remote-control] Wrote ' + configPath + ' with certUrl for ' + publicHost);
+// -----------------------------------------------------------------------
+
 const port = process.env.PORT || '443';
 const args = [
   '--port', port,
   '--mongodb', process.env.MONGO_URL,
   '--tlsoffload',
+  '--datadir', dataDir,
   '--launch', String(process.pid),
 ];
 process.argv = [process.argv[0], process.argv[1], ...args];
