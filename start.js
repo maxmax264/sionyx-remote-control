@@ -139,7 +139,8 @@ async function main() {
   const configPath = path.join(dataDir, 'config.json');
   const config = {
     settings: {
-      cert: publicHost
+      cert: publicHost,
+      aliasPort: 443
     },
     domains: {
       '': {
