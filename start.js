@@ -140,7 +140,8 @@ async function main() {
   const config = {
     settings: {
       cert: publicHost,
-      aliasPort: 443
+      aliasPort: 443,
+      redirPort: 8081
     },
     domains: {
       '': {
