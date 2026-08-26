@@ -40,49 +40,134 @@ stdinStub.read = function () { return null; };
 stdinStub.pipe = function () { return stdinStub; };
 Object.defineProperty(process, 'stdin', { value: stdinStub, configurable: true });
 
-// --- TLS / certificate-pinning fix -----------------------------------
-// --tlsoffload alone tells MeshCentral "don't do TLS yourself, a proxy
-// (Cloudflare/Render) handles it" - but it does NOT tell MeshCentral
-// what the *real* public-facing certificate looks like. Agents pin the
-// hash of that real certificate on first connect; without certUrl,
-// MeshCentral computes the hash from its own self-signed cert instead
-// of the one clients actually see, so the agent connection gets stuck
-// in "holding" state. certUrl can only be set via config.json (there's
-// no CLI flag for it), so we generate that file here before MeshCentral
-// starts, instead of committing a static one to the repo.
 const fs = require('fs');
 const path = require('path');
 
 const publicHost = process.env.PUBLIC_HOSTNAME || process.env.RENDER_EXTERNAL_HOSTNAME || 'sionyx-remote-control.onrender.com';
-
 const dataDir = path.join(__dirname, 'meshcentral-data');
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
 
-const configPath = path.join(dataDir, 'config.json');
-const config = {
-  settings: {
-    cert: publicHost
-  },
-  domains: {
-    '': {
-      certUrl: 'https://' + publicHost + ':443/'
-    }
-  }
-};
-fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-console.log('[sionyx-remote-control] Wrote ' + configPath + ' with certUrl for ' + publicHost);
-// -----------------------------------------------------------------------
+// --- Certificate persistence via MongoDB --------------------------------
+// Render's filesystem is ephemeral: meshcentral-data (including the
+// server's generated certificates) is wiped on every deploy/restart
+// unless a paid persistent disk is attached. Since we already have a
+// MongoDB instance (MONGO_URL) that IS persistent, we use it to back up
+// and restore the certificate files instead of paying for a disk.
+// Generic by design: it backs up/restores every *.crt and *.key file in
+// meshcentral-data, so it doesn't depend on exact filenames that could
+// change between MeshCentral versions.
+const CERT_BACKUP_COLLECTION = 'sionyxCertBackup';
+const CERT_BACKUP_DOC_ID = 'certs';
 
-const port = process.env.PORT || '443';
-const args = [
-  '--port', port,
-  '--mongodb', process.env.MONGO_URL,
-  '--tlsoffload',
-  '--datapath', dataDir,
-  '--launch', String(process.pid),
-];
-process.argv = [process.argv[0], process.argv[1], ...args];
-console.log('[sionyx-remote-control] Starting MeshCentral on port ' + port + ' (pid ' + process.pid + ')...');
-require('meshcentral').mainStart();
+function listCertFiles() {
+  return fs.readdirSync(dataDir).filter((f) => /\.(crt|key)$/i.test(f));
+}
+
+async function restoreCertsFromMongo() {
+  let MongoClient;
+  try {
+    ({ MongoClient } = require('mongodb'));
+  } catch (e) {
+    console.error('[sionyx-remote-control] mongodb driver not available, skipping cert restore:', e.message);
+    return;
+  }
+  const client = new MongoClient(process.env.MONGO_URL, { serverSelectionTimeoutMS: 8000 });
+  try {
+    await client.connect();
+    const db = client.db();
+    const doc = await db.collection(CERT_BACKUP_COLLECTION).findOne({ _id: CERT_BACKUP_DOC_ID });
+    if (doc && doc.files) {
+      const names = Object.keys(doc.files);
+      for (const name of names) {
+        fs.writeFileSync(path.join(dataDir, name), Buffer.from(doc.files[name], 'base64'));
+      }
+      console.log('[sionyx-remote-control] Restored ' + names.length + ' certificate file(s) from MongoDB backup.');
+    } else {
+      console.log('[sionyx-remote-control] No certificate backup found in MongoDB yet (first run) - MeshCentral will generate new certs.');
+    }
+  } catch (e) {
+    console.error('[sionyx-remote-control] Cert restore from MongoDB failed (continuing without it):', e.message);
+  } finally {
+    await client.close().catch(() => {});
+  }
+}
+
+async function backupCertsToMongo() {
+  let MongoClient;
+  try {
+    ({ MongoClient } = require('mongodb'));
+  } catch (e) {
+    console.error('[sionyx-remote-control] mongodb driver not available, skipping cert backup:', e.message);
+    return;
+  }
+  const client = new MongoClient(process.env.MONGO_URL, { serverSelectionTimeoutMS: 8000 });
+  try {
+    const names = listCertFiles();
+    if (names.length === 0) {
+      console.log('[sionyx-remote-control] No cert files found to back up yet.');
+      return;
+    }
+    const files = {};
+    for (const name of names) {
+      files[name] = fs.readFileSync(path.join(dataDir, name)).toString('base64');
+    }
+    await client.connect();
+    const db = client.db();
+    await db.collection(CERT_BACKUP_COLLECTION).updateOne(
+      { _id: CERT_BACKUP_DOC_ID },
+      { $set: { files, updatedAt: new Date() } },
+      { upsert: true }
+    );
+    console.log('[sionyx-remote-control] Backed up ' + names.length + ' certificate file(s) to MongoDB.');
+  } catch (e) {
+    console.error('[sionyx-remote-control] Cert backup to MongoDB failed:', e.message);
+  } finally {
+    await client.close().catch(() => {});
+  }
+}
+// -------------------------------------------------------------------------
+
+async function main() {
+  await restoreCertsFromMongo();
+
+  // certUrl fix: --tlsoffload alone doesn't tell MeshCentral what the real
+  // public-facing certificate looks like (needed so agents' pinned cert
+  // hash matches what they actually see through Cloudflare/Render). There
+  // is no CLI flag for certUrl, so it must go in config.json.
+  const configPath = path.join(dataDir, 'config.json');
+  const config = {
+    settings: {
+      cert: publicHost
+    },
+    domains: {
+      '': {
+        certUrl: 'https://' + publicHost + ':443/'
+      }
+    }
+  };
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  console.log('[sionyx-remote-control] Wrote ' + configPath + ' with certUrl for ' + publicHost);
+
+  const port = process.env.PORT || '443';
+  const args = [
+    '--port', port,
+    '--mongodb', process.env.MONGO_URL,
+    '--tlsoffload',
+    '--datapath', dataDir,
+    '--launch', String(process.pid),
+  ];
+  process.argv = [process.argv[0], process.argv[1], ...args];
+  console.log('[sionyx-remote-control] Starting MeshCentral on port ' + port + ' (pid ' + process.pid + ')...');
+  require('meshcentral').mainStart();
+
+  // Give MeshCentral time to generate certs on a first run, then back them
+  // up to MongoDB so the next deploy/restart can restore them instead of
+  // generating (and thus invalidating) new ones.
+  setTimeout(() => {
+    backupCertsToMongo();
+  }, 60000);
+}
+
+main();
