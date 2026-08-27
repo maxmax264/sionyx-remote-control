@@ -159,9 +159,8 @@ async function main() {
     '--tlsoffload',
     '--datapath', dataDir,
     '--launch', String(process.pid),
-    // TEMP DIAGNOSTIC: verbose per-connection agent logging (coreinfo/caps).
-    // Remove this line once the Desktop-capability issue is understood.
-    '--debug', 'all',
+    // TEMP DIAGNOSTIC: verbose agent/coremodule logging. Remove once resolved.
+    '--debug', 'agent,agentupdate,main',
   ];
   process.argv = [process.argv[0], process.argv[1], ...args];
   console.log('[sionyx-remote-control] Starting MeshCentral on port ' + port + ' (pid ' + process.pid + ')...');
