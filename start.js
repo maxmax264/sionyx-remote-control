@@ -136,12 +136,25 @@ async function main() {
   // public-facing certificate looks like (needed so agents' pinned cert
   // hash matches what they actually see through Cloudflare/Render). There
   // is no CLI flag for certUrl, so it must go in config.json.
+  //
+  // wscompression fix: MeshCentral disables WebSocket permessage-deflate
+  // compression by default on the agent connection (see webserver.js,
+  // obj.agentapp's expressWsAlt setup - it only enables it when
+  // args.wscompression === true). Render Free's proxy silently drops/
+  // truncates single WebSocket messages over ~64KB, and the "windows-amt"
+  // core module MeshCentral pushes to Windows agents is ~844KB uncompressed
+  // - well over that limit, which is why "Updating core windows-amt for
+  // agent" never completes and the agent never gets Desktop/KVM
+  // capabilities. Turning on compression here lets that same minified JS
+  // core travel as a much smaller compressed payload, which may land
+  // under the 64KB threshold without needing to change hosting at all.
   const configPath = path.join(dataDir, 'config.json');
   const config = {
     settings: {
       cert: publicHost,
       aliasPort: 443,
-      redirPort: 8081
+      redirPort: 8081,
+      wscompression: true
     },
     domains: {
       '': {
@@ -150,7 +163,7 @@ async function main() {
     }
   };
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-  console.log('[sionyx-remote-control] Wrote ' + configPath + ' with certUrl for ' + publicHost);
+  console.log('[sionyx-remote-control] Wrote ' + configPath + ' with certUrl for ' + publicHost + ' (wscompression enabled)');
 
   const port = process.env.PORT || '443';
   const args = [
