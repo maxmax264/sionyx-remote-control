@@ -154,7 +154,20 @@ async function main() {
       cert: publicHost,
       aliasPort: 443,
       redirPort: 8081,
-      wscompression: true
+      wscompression: true,
+      // ignoreAgentHashCheck fix: confirmed via `openssl`/PowerShell cert
+      // inspection that the "Agent bad web cert hash" errors are caused by
+      // NetFree (ISP-level content filter, issuer "NetFree Node
+      // Intermediate CA, Bezeq") doing TLS interception on this network -
+      // it swaps in its own certificate, so the agent's certificate-pin
+      // check against the real server cert always fails. This is a known,
+      // documented MeshCentral scenario (see Ylianst/MeshCentral issue
+      // #1662 and discussion #5807) for networks that intentionally
+      // re-sign TLS traffic. Scoped to the specific filtered network's
+      // public IP(s) rather than "true" globally, so the pin check still
+      // protects every other connection. Comma-separate multiple IPs/CIDRs
+      // if more filtered networks show up later, e.g. "1.2.3.4,5.6.7.0/24".
+      ignoreAgentHashCheck: '79.177.157.200'
     },
     domains: {
       '': {
